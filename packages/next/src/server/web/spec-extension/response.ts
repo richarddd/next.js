@@ -81,6 +81,7 @@ export class NextResponse<Body = unknown> extends Response {
     super(body, init)
 
     this[INTERNALS] = {
+      cookies: undefined,
       init,
       url: init.url
         ? new NextURL(init.url, {

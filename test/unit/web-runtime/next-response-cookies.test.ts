@@ -119,3 +119,47 @@ it('response.cookie does not modify options', async () => {
   response.cookies.set('cookieName', 'cookieValue', options)
   expect(options).toEqual({ maxAge: 10000 })
 })
+
+it('preserves initial cookies when accessed and mutated', () => {
+  const initialCookies = [
+    'first=one; Path=/; Expires=Tue, 01 Jan 2030 00:00:00 GMT',
+    'kept=two; Path=/test',
+  ]
+  const response = new NextResponse(null, {
+    headers: [
+      ['set-cookie', initialCookies[0]],
+      ['set-cookie', initialCookies[1]],
+    ],
+  })
+
+  expect(response.headers.getSetCookie()).toEqual(initialCookies)
+  const cookies = response.cookies
+  expect(response.cookies).toBe(cookies)
+  expect(cookies.getAll()).toEqual([
+    {
+      name: 'first',
+      value: 'one',
+      path: '/',
+      expires: new Date('2030-01-01T00:00:00Z'),
+    },
+    { name: 'kept', value: 'two', path: '/test' },
+  ])
+
+  cookies.set('added', 'three')
+  cookies.delete('first')
+
+  const expectedCookies = [
+    'first=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT',
+    initialCookies[1],
+    'added=three; Path=/',
+  ]
+  expect(response.headers.getSetCookie()).toEqual(expectedCookies)
+  expect(response.headers.get('x-middleware-set-cookie')).toBe(
+    expectedCookies.join(',')
+  )
+  expect(cookies.get('kept')).toEqual({
+    name: 'kept',
+    value: 'two',
+    path: '/test',
+  })
+})
