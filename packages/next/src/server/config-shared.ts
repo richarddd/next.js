@@ -598,6 +598,13 @@ export interface ExperimentalConfig {
         maxBundleSize?: number
       }
   preloadEntriesOnStart?: boolean
+  /**
+   * Skip config-schema validation during `next start`.
+   * `next build` and `next dev` still validate the config.
+   *
+   * @default false
+   */
+  skipRuntimeConfigValidation?: boolean
   clientRouterFilter?: boolean
   clientRouterFilterRedirects?: boolean
   /**
@@ -2403,6 +2410,7 @@ export const defaultConfig = Object.freeze({
     instrumentationClientRouterTransitionEvents: false,
     prefetchInlining: true,
     preloadEntriesOnStart: true,
+    skipRuntimeConfigValidation: false,
     clientRouterFilter: true,
     clientRouterFilterRedirects: false,
     fetchCacheKeyPrefix: '',

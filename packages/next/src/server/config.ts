@@ -46,7 +46,6 @@ import type { ZodError } from 'next/dist/compiled/zod'
 import { hasNextSupport } from '../server/ci-info'
 import { transpileConfig } from '../build/next-config-ts/transpile-config'
 import { dset } from '../shared/lib/dset'
-import { normalizeZodErrors } from '../shared/lib/zod'
 import { HTML_LIMITED_BOT_UA_RE_STRING } from '../shared/lib/router/utils/is-bot'
 import { findDir } from '../lib/find-pages-dir'
 import { INFINITE_CACHE } from '../lib/constants'
@@ -103,6 +102,8 @@ function normalizeNextConfigZodErrors(
 ): [warnings: string[], fatalErrors: string[]] {
   const warnings: string[] = []
   const fatalErrors: string[] = []
+  const { normalizeZodErrors } =
+    require('../shared/lib/zod') as typeof import('../shared/lib/zod')
   const issues = normalizeZodErrors(error)
 
   for (const { issue, message: originalMessage } of issues) {
@@ -2229,8 +2230,10 @@ async function loadConfigImpl(
       )
     }
 
-    // Always validate the config against schema in non minimal mode
-    if (!process.env.NEXT_MINIMAL && !silent) {
+    const skipRuntimeConfigValidation =
+      phase === PHASE_PRODUCTION_SERVER &&
+      userConfig.experimental?.skipRuntimeConfigValidation === true
+    if (!process.env.NEXT_MINIMAL && !silent && !skipRuntimeConfigValidation) {
       await validateConfigSchema(
         userConfig,
         configFileName,
