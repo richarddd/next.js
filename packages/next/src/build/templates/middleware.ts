@@ -74,8 +74,14 @@ function errorHandledHandler(fn: AdapterOptions['handler']) {
   }
 }
 
+// `ensureInstrumentationRegistered` memoizes its promise globally, so once it
+// has resolved there is nothing left to do on later requests: skip the
+// requires, path computations and the extra await.
+let instrumentationRegistered = false
+const handledUserland = errorHandledHandler(handlerUserland)
+
 const internalHandler: EdgeHandler = async (opts) => {
-  if (process.env.NEXT_RUNTIME !== 'edge') {
+  if (process.env.NEXT_RUNTIME !== 'edge' && !instrumentationRegistered) {
     // This mirrors what `RouteModule#prepare` does for routes
     // edge runtime handles loading instrumentation at the edge adapter level
     const { join, relative } =
@@ -93,6 +99,7 @@ const internalHandler: EdgeHandler = async (opts) => {
       : '.next'
 
     await ensureInstrumentationRegistered(absoluteProjectDir, distDir)
+    instrumentationRegistered = true
   }
 
   return adapter({
@@ -100,7 +107,7 @@ const internalHandler: EdgeHandler = async (opts) => {
     IncrementalCache,
     incrementalCacheHandler,
     page,
-    handler: errorHandledHandler(handlerUserland),
+    handler: handledUserland,
   })
 }
 

@@ -101,6 +101,22 @@ export type EdgeHandler = (opts: {
   request: AdapterOptions['request']
 }) => Promise<FetchEventResult>
 
+// A plain local URL (no query, hash, percent-encoding, dot segments or
+// trailing slash, and not under /_next/) is returned unchanged by NextURL, so
+// for those the adapter can skip parsing it until a rewrite or redirect needs
+// it. Default ports are excluded because URL formatting drops them.
+const SIMPLE_LOCAL_URL =
+  /^https?:\/\/localhost(?::(?!80\/)(?!443\/)[1-9]\d{0,4})?(?!\/_next\/)(?:\/|(?:\/[A-Za-z0-9_~!$&'()*+,;=:@-][A-Za-z0-9._~!$&'()*+,;=:@-]*)+)$/
+
+function getNodeHeader(
+  headers: RequestData['headers'],
+  name: string
+): string | null {
+  const value = headers[name]
+  if (value === undefined) return null
+  return Array.isArray(value) ? value.join(', ') : String(value)
+}
+
 let propagator: <T>(request: NextRequestHint, fn: () => T) => T = (
   request,
   fn
@@ -136,51 +152,107 @@ export async function adapter(
 
   params.request.url = normalizeRscURL(params.request.url)
 
-  const requestURL = params.bypassNextUrl
-    ? new URL(params.request.url)
-    : new NextURL(params.request.url, {
-        headers: params.request.headers,
-        nextConfig: params.request.nextConfig,
-      })
+  // Read request header flags straight from the Node.js headers object rather
+  // than building a Headers instance first and querying it.
+  const nodeRequestHeaders = params.request.headers
+  const isNextDataRequest =
+    getNodeHeader(nodeRequestHeaders, 'x-nextjs-data') !== null
+  const isRSCRequest = isRSCRequestHeader(
+    getNodeHeader(nodeRequestHeaders, RSC_HEADER)
+  )
 
-  // Iterator uses an index to keep track of the current iteration. Because of deleting and appending below we can't just use the iterator.
-  // Instead we use the keys before iteration.
-  const keys = [...requestURL.searchParams.keys()]
-  for (const key of keys) {
-    const value = requestURL.searchParams.getAll(key)
-
-    const normalizedKey = normalizeNextQueryParam(key)
-    if (normalizedKey) {
-      requestURL.searchParams.delete(normalizedKey)
-      for (const val of value) {
-        requestURL.searchParams.append(normalizedKey, val)
-      }
-      requestURL.searchParams.delete(key)
+  const createRequestURL = () => {
+    const url = params.bypassNextUrl
+      ? new URL(params.request.url)
+      : new NextURL(params.request.url, {
+          headers: params.request.headers,
+          nextConfig: params.request.nextConfig,
+        })
+    if ('buildId' in url) {
+      url.buildId = ''
     }
+    return url
   }
+  let lazyRequestURL: URL | NextURL | null = null
+  const getRequestURL = () => (lazyRequestURL ??= createRequestURL())
 
-  // Ensure users only see page requests, never data requests.
-  let buildId = process.env.__NEXT_BUILD_ID || ''
-  if ('buildId' in requestURL) {
-    buildId = (requestURL as NextURL).buildId || ''
-    requestURL.buildId = ''
+  const isSimpleURL =
+    !params.bypassNextUrl &&
+    process.env.NEXT_RUNTIME !== 'edge' &&
+    !isEdgeRendering &&
+    !process.env.__NEXT_NO_MIDDLEWARE_URL_NORMALIZE &&
+    !isNextDataRequest &&
+    !params.request.nextConfig?.basePath &&
+    !params.request.nextConfig?.i18n &&
+    !params.request.nextConfig?.trailingSlash &&
+    SIMPLE_LOCAL_URL.test(params.request.url)
+
+  let buildId: string
+  let rscHash: string | null
+  let requestInput: string
+  if (isSimpleURL) {
+    // There is nothing to normalize: no query params, no build ID, and the
+    // URL round-trips through NextURL unchanged. The NextURL is created on
+    // first use instead (see getRequestURL).
+    buildId = ''
+    rscHash = null
+    requestInput = params.request.url
+  } else {
+    const requestURL = (lazyRequestURL = params.bypassNextUrl
+      ? new URL(params.request.url)
+      : new NextURL(params.request.url, {
+          headers: params.request.headers,
+          nextConfig: params.request.nextConfig,
+        }))
+
+    // Iterator uses an index to keep track of the current iteration. Because of deleting and appending below we can't just use the iterator.
+    // Instead we use the keys before iteration.
+    const keys = [...requestURL.searchParams.keys()]
+    for (const key of keys) {
+      const value = requestURL.searchParams.getAll(key)
+
+      const normalizedKey = normalizeNextQueryParam(key)
+      if (normalizedKey) {
+        requestURL.searchParams.delete(normalizedKey)
+        for (const val of value) {
+          requestURL.searchParams.append(normalizedKey, val)
+        }
+        requestURL.searchParams.delete(key)
+      }
+    }
+
+    // Ensure users only see page requests, never data requests.
+    buildId = process.env.__NEXT_BUILD_ID || ''
+    if ('buildId' in requestURL) {
+      buildId = (requestURL as NextURL).buildId || ''
+      requestURL.buildId = ''
+    }
+
+    if (isNextDataRequest && requestURL.pathname === '/index') {
+      requestURL.pathname = '/'
+    }
+
+    const normalizeURL = process.env.__NEXT_NO_MIDDLEWARE_URL_NORMALIZE
+      ? new URL(params.request.url)
+      : requestURL
+
+    rscHash = normalizeURL.searchParams.get(NEXT_RSC_UNION_QUERY)
+
+    // Strip internal query parameters off the request.
+    requestInput = process.env.__NEXT_NO_MIDDLEWARE_URL_NORMALIZE
+      ? normalizeURL.toString()
+      : stripInternalSearchParams(normalizeURL).toString()
   }
   let deploymentId = process.env.NEXT_DEPLOYMENT_ID
 
-  const requestHeaders = fromNodeOutgoingHttpHeaders(params.request.headers)
-  const isNextDataRequest = requestHeaders.has('x-nextjs-data')
-  const isRSCRequest = isRSCRequestHeader(requestHeaders.get(RSC_HEADER))
-
-  if (isNextDataRequest && requestURL.pathname === '/index') {
-    requestURL.pathname = '/'
-  }
+  const requestHeaders = fromNodeOutgoingHttpHeaders(nodeRequestHeaders)
 
   const flightHeaders = new Map()
 
   // Headers should only be stripped for middleware
   if (!isEdgeRendering && !process.env.__NEXT_NO_MIDDLEWARE_URL_NORMALIZE) {
     for (const header of FLIGHT_HEADERS) {
-      const value = requestHeaders.get(header)
+      const value = getNodeHeader(nodeRequestHeaders, header)
       if (value !== null) {
         flightHeaders.set(header, value)
         requestHeaders.delete(header)
@@ -188,18 +260,9 @@ export async function adapter(
     }
   }
 
-  const normalizeURL = process.env.__NEXT_NO_MIDDLEWARE_URL_NORMALIZE
-    ? new URL(params.request.url)
-    : requestURL
-
-  const rscHash = normalizeURL.searchParams.get(NEXT_RSC_UNION_QUERY)
-
-  const request = new NextRequestHint({
+  const requestInit: ConstructorParameters<typeof NextRequestHint>[0] = {
     page: params.page,
-    // Strip internal query parameters off the request.
-    input: process.env.__NEXT_NO_MIDDLEWARE_URL_NORMALIZE
-      ? normalizeURL.toString()
-      : stripInternalSearchParams(normalizeURL).toString(),
+    input: requestInput,
     init: {
       body: params.request.body,
       headers: requestHeaders,
@@ -207,7 +270,8 @@ export async function adapter(
       nextConfig: params.request.nextConfig,
       signal: params.request.signal,
     },
-  })
+  }
+  const request = new NextRequestHint(requestInit)
 
   if (params.request.requestMeta) {
     setRequestMeta(request, params.request.requestMeta)
@@ -414,7 +478,7 @@ export async function adapter(
      */
     const { url: relativeDestination, isRelative } = parseRelativeURL(
       destination.toString(),
-      requestURL.toString()
+      getRequestURL().toString()
     )
 
     if (
@@ -444,10 +508,10 @@ export async function adapter(
     // this isn't an external rewrite, we need to set the rewritten pathname and
     // query headers.
     if (isRSCRequest && (isRelative || isAllowedOrigin)) {
-      if (requestURL.pathname !== destination.pathname) {
+      if (getRequestURL().pathname !== destination.pathname) {
         response.headers.set(NEXT_REWRITTEN_PATH_HEADER, destination.pathname)
       }
-      if (requestURL.search !== destination.search) {
+      if (getRequestURL().search !== destination.search) {
         response.headers.set(
           NEXT_REWRITTEN_QUERY_HEADER,
           // remove the leading ? from the search string
@@ -495,11 +559,11 @@ export async function adapter(
     response = new Response(response.body, response)
 
     if (!process.env.__NEXT_NO_MIDDLEWARE_URL_NORMALIZE) {
-      if (redirectURL.host === requestURL.host) {
+      if (redirectURL.host === getRequestURL().host) {
         redirectURL.buildId = buildId || redirectURL.buildId
         response.headers.set(
           'Location',
-          getRelativeURL(redirectURL, requestURL)
+          getRelativeURL(redirectURL, getRequestURL())
         )
       }
     }
@@ -513,7 +577,7 @@ export async function adapter(
       response.headers.delete('Location')
       response.headers.set(
         'x-nextjs-redirect',
-        getRelativeURL(redirectURL.toString(), requestURL.toString())
+        getRelativeURL(redirectURL.toString(), getRequestURL().toString())
       )
     }
   }

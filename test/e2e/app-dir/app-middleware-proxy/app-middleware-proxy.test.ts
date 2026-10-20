@@ -8,6 +8,21 @@ describe('app-dir with proxy', () => {
     files: __dirname,
   })
 
+  it('preserves request headers, cookies, and native Request behavior', async () => {
+    const response = await next.fetch('/request-object')
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({
+      sameHeaders: true,
+      sameCookies: true,
+      aborted: false,
+      header: 'present',
+      cookie: 'value',
+      clonedHeader: 'present',
+      clonedCookie: 'request-probe=value',
+      nativePathname: '/request-object',
+    })
+  })
+
   if (isNextDev) {
     it('should log compilation time', async () => {
       await next.browser('/')

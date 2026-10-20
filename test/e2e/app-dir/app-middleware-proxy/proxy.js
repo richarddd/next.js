@@ -12,6 +12,26 @@ const getCachedValue = unstable_cache(
  * @param {import('next/server').NextRequest} request
  */
 export async function proxy(request) {
+  if (request.nextUrl.pathname === '/request-object') {
+    const headers = request.headers
+    const cookies = request.cookies
+    const signal = request.signal
+    headers.set('x-request-probe', 'present')
+    cookies.set('request-probe', 'value')
+    const clone = request.clone()
+
+    return NextResponse.json({
+      sameHeaders: headers === request.headers,
+      sameCookies: cookies === request.cookies,
+      aborted: signal.aborted,
+      header: request.headers.get('x-request-probe'),
+      cookie: request.cookies.get('request-probe')?.value,
+      clonedHeader: clone.headers.get('x-request-probe'),
+      clonedCookie: clone.headers.get('cookie'),
+      nativePathname: new URL(new Request(request).url).pathname,
+    })
+  }
+
   const headersFromRequest = new Headers(request.headers)
   // It should be able to import and use `headers` inside proxy
   const headersFromNext = await nextHeaders()
