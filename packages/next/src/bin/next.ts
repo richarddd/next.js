@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import '../lib/enable-compile-cache'
 import '../server/require-hook'
 
 import os from 'os'
