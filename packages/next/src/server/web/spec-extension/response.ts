@@ -119,19 +119,8 @@ export class NextResponse<Body = unknown> extends Response {
     body: JsonBody,
     init?: ResponseInit
   ): NextResponse<JsonBody> {
-    const data = JSON.stringify(body)
-    if (data === undefined) {
-      throw new TypeError('Value is not JSON serializable')
-    }
-    const headers = new Headers(init?.headers)
-    if (!headers.has('content-type')) {
-      headers.set('content-type', 'application/json')
-    }
-    return new NextResponse(data, {
-      status: init?.status,
-      statusText: init?.statusText,
-      headers,
-    })
+    const response = Response.json(body, init)
+    return new NextResponse(response.body, response)
   }
 
   static redirect(url: string | NextURL | URL, init?: number | ResponseInit) {
