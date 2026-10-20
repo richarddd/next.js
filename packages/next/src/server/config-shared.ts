@@ -598,6 +598,15 @@ export interface ExperimentalConfig {
         maxBundleSize?: number
       }
   preloadEntriesOnStart?: boolean
+  /**
+   * Skip validating `next.config` against the config schema when the
+   * production server starts (`next start`). The config is still validated by
+   * `next build` and `next dev`, so this only avoids repeating that work, and
+   * loading the schema and zod, on every server start.
+   *
+   * @default false
+   */
+  skipRuntimeConfigValidation?: boolean
   clientRouterFilter?: boolean
   clientRouterFilterRedirects?: boolean
   /**
@@ -2403,6 +2412,7 @@ export const defaultConfig = Object.freeze({
     instrumentationClientRouterTransitionEvents: false,
     prefetchInlining: true,
     preloadEntriesOnStart: true,
+    skipRuntimeConfigValidation: false,
     clientRouterFilter: true,
     clientRouterFilterRedirects: false,
     fetchCacheKeyPrefix: '',
