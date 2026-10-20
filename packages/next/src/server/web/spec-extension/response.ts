@@ -28,6 +28,42 @@ function handleMiddlewareField(
   }
 }
 
+function createCookiesProxy(
+  headers: Headers,
+  init: MiddlewareResponseInit | undefined
+): ResponseCookies {
+  const cookies = new ResponseCookies(headers)
+
+  return new Proxy(cookies, {
+    get(target, prop, receiver) {
+      switch (prop) {
+        case 'delete':
+        case 'set': {
+          return (...args: [string, string]) => {
+            const result = Reflect.apply(target[prop], target, args)
+            const newHeaders = new Headers(headers)
+
+            if (result instanceof ResponseCookies) {
+              headers.set(
+                'x-middleware-set-cookie',
+                result
+                  .getAll()
+                  .map((cookie) => stringifyCookie(cookie))
+                  .join(',')
+              )
+            }
+
+            handleMiddlewareField(init, newHeaders)
+            return result
+          }
+        }
+        default:
+          return ReflectAdapter.get(target, prop, receiver)
+      }
+    },
+  })
+}
+
 /**
  * This class extends the [Web `Response` API](https://developer.mozilla.org/docs/Web/API/Response) with additional convenience methods.
  *
@@ -35,7 +71,8 @@ function handleMiddlewareField(
  */
 export class NextResponse<Body = unknown> extends Response {
   [INTERNALS]: {
-    cookies: ResponseCookies
+    cookies?: ResponseCookies
+    init: ResponseInit
     url?: NextURL
     body?: Body
   }
@@ -43,43 +80,11 @@ export class NextResponse<Body = unknown> extends Response {
   constructor(body?: BodyInit | null, init: ResponseInit = {}) {
     super(body, init)
 
-    const headers = this.headers
-    const cookies = new ResponseCookies(headers)
-
-    const cookiesProxy = new Proxy(cookies, {
-      get(target, prop, receiver) {
-        switch (prop) {
-          case 'delete':
-          case 'set': {
-            return (...args: [string, string]) => {
-              const result = Reflect.apply(target[prop], target, args)
-              const newHeaders = new Headers(headers)
-
-              if (result instanceof ResponseCookies) {
-                headers.set(
-                  'x-middleware-set-cookie',
-                  result
-                    .getAll()
-                    .map((cookie) => stringifyCookie(cookie))
-                    .join(',')
-                )
-              }
-
-              handleMiddlewareField(init, newHeaders)
-              return result
-            }
-          }
-          default:
-            return ReflectAdapter.get(target, prop, receiver)
-        }
-      },
-    })
-
     this[INTERNALS] = {
-      cookies: cookiesProxy,
+      init,
       url: init.url
         ? new NextURL(init.url, {
-            headers: toNodeOutgoingHttpHeaders(headers),
+            headers: toNodeOutgoingHttpHeaders(this.headers),
             nextConfig: init.nextConfig,
           })
         : undefined,
@@ -103,15 +108,30 @@ export class NextResponse<Body = unknown> extends Response {
   }
 
   public get cookies() {
-    return this[INTERNALS].cookies
+    const internals = this[INTERNALS]
+    return (internals.cookies ??= createCookiesProxy(
+      this.headers,
+      internals.init
+    ))
   }
 
   static json<JsonBody>(
     body: JsonBody,
     init?: ResponseInit
   ): NextResponse<JsonBody> {
-    const response: Response = Response.json(body, init)
-    return new NextResponse(response.body, response)
+    const data = JSON.stringify(body)
+    if (data === undefined) {
+      throw new TypeError('Value is not JSON serializable')
+    }
+    const headers = new Headers(init?.headers)
+    if (!headers.has('content-type')) {
+      headers.set('content-type', 'application/json')
+    }
+    return new NextResponse(data, {
+      status: init?.status,
+      statusText: init?.statusText,
+      headers,
+    })
   }
 
   static redirect(url: string | NextURL | URL, init?: number | ResponseInit) {
