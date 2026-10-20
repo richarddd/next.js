@@ -1,8 +1,8 @@
 import { EventEmitter } from 'events'
 import type { IncomingMessage, ServerResponse } from 'http'
 import path from 'path'
-import { createProxyFastPath } from '../../../packages/next/src/server/lib/router-utils/proxy-fast-path'
-import { getRequestMeta } from '../../../packages/next/src/server/request-meta'
+import { createProxyFastPath } from 'next/dist/server/lib/router-utils/proxy-fast-path'
+import { getRequestMeta } from 'next/dist/server/request-meta'
 
 const distDir = path.join(__dirname, 'fixtures', '.next')
 const middlewarePath = path.join(distDir, 'server', 'middleware.js')
