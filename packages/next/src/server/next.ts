@@ -25,6 +25,7 @@ import { NextServerSpan } from './lib/trace/constants'
 import { formatUrl } from '../shared/lib/router/utils/format-url'
 import type { ServerFields } from './lib/router-utils/setup-dev-bundler'
 import type { ServerInitResult } from './lib/render-server'
+import type { ProxyFastPathServerContext } from './lib/router-utils/proxy-fast-path'
 import { AsyncCallbackSet } from './lib/async-callback-set'
 
 let ServerImpl: typeof NextNodeServer
@@ -380,6 +381,12 @@ export class NextServer implements NextWrapperServer {
     }
 
     return { config, compileMode: undefined }
+  }
+
+  /** @internal */
+  public async getProxyFastPathServerContext(): Promise<ProxyFastPathServerContext> {
+    const server = await this.getServer()
+    return server.getProxyFastPathServerContext()
   }
 
   private async getServer() {
