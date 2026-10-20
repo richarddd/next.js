@@ -19,8 +19,10 @@ import {
   urlQueryToSearchParams,
 } from '../../../shared/lib/router/utils/querystring'
 import { addRequestMeta } from '../../request-meta'
+import { setForwardedHeaders } from '../set-forwarded-headers'
 
 export interface ProxyFastPathServerContext {
+  hostname?: string
   fetchHostname?: string
   port?: number
   getWaitUntil: () => ((promise: Promise<any>) => void) | undefined
@@ -125,13 +127,6 @@ export function createProxyFastPath({
   }
   const proxyRegexes = matchers.map((matcher) => new RegExp(matcher.regexp))
 
-  const proxyModule = require(
-    path.join(distDir, SERVER_DIRECTORY, 'middleware.js')
-  ) as NodeProxyModule
-  const adapterFn = proxyModule.default
-  const proxyHandler =
-    proxyModule.proxy || proxyModule.middleware || proxyModule
-
   const nextConfigForRequest = {
     basePath: config.basePath,
     i18n: config.i18n,
@@ -140,12 +135,14 @@ export function createProxyFastPath({
   }
 
   let serverContext: ProxyFastPathServerContext | undefined
+  let proxyModule: NodeProxyModule | undefined
 
   return async function handleWithProxyFastPath(req, res) {
     const { method, url, headers } = req
     // Bodies need the cloneable-body plumbing of the generic path.
     if (method !== 'GET' && method !== 'HEAD') return false
-    if (!url || url.charCodeAt(0) !== 47 /* / */) return false
+    if (!url || url.charCodeAt(0) !== 47 /* / */ || url.includes('#'))
+      return false
     if (headers['x-nextjs-data'] || headers['x-prerender-revalidate']) {
       return false
     }
@@ -156,7 +153,8 @@ export function createProxyFastPath({
       pathname.startsWith('/_next/') ||
       pathname.includes('//') ||
       pathname.includes('\\') ||
-      pathname.includes('%')
+      pathname.includes('%') ||
+      pathname.includes('/.')
     ) {
       return false
     }
@@ -166,6 +164,16 @@ export function createProxyFastPath({
     serverContext ??= await getServerContext()
     if (!serverContext) return false
 
+    proxyModule ??= (await require(
+      path.join(distDir, SERVER_DIRECTORY, 'middleware.js')
+    )) as NodeProxyModule
+    setForwardedHeaders(
+      headers,
+      req,
+      serverContext.hostname,
+      serverContext.port
+    )
+
     // Same request URL as `NextNodeServer.runMiddleware` builds.
     const search = queryIndex === -1 ? '' : url.slice(queryIndex + 1)
     const query = search
@@ -173,15 +181,12 @@ export function createProxyFastPath({
           searchParamsToUrlQuery(new URLSearchParams(search))
         ).toString()
       : ''
-    const protocol =
-      (req.socket as { encrypted?: boolean } | undefined)?.encrypted ||
-      (typeof headers['x-forwarded-proto'] === 'string' &&
-        headers['x-forwarded-proto'].includes('https'))
-        ? 'https'
-        : 'http'
+    const protocol = headers['x-forwarded-proto']?.includes('https')
+      ? 'https'
+      : 'http'
 
-    const result = await adapterFn({
-      handler: proxyHandler,
+    const result = await proxyModule.default({
+      handler: proxyModule.proxy || proxyModule.middleware || proxyModule,
       request: {
         headers,
         method,

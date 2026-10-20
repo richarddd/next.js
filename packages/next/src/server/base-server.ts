@@ -47,7 +47,6 @@ import type {
   ServerResponse as HTTPServerResponse,
 } from 'http'
 import type { ProxyMatcher } from '../build/analysis/get-page-static-info'
-import type { TLSSocket } from 'tls'
 import type { PathnameNormalizer } from './normalizers/request/pathname-normalizer'
 import type { InstrumentationModule } from './instrumentation/types'
 
@@ -147,6 +146,7 @@ import { isInterceptionRouteAppPath } from '../shared/lib/router/utils/intercept
 import { toRoute } from './lib/to-route'
 import type { DeepReadonly } from '../shared/lib/deep-readonly'
 import { isNodeNextRequest, isNodeNextResponse } from './base-http/helpers'
+import { setForwardedHeaders } from './lib/set-forwarded-headers'
 import { patchSetHeaderWithCookieSupport } from './lib/patch-set-header'
 import {
   getBuiltinRequestContext,
@@ -1040,19 +1040,12 @@ export default abstract class Server<
 
       // Update the `x-forwarded-*` headers.
       const { originalRequest = null } = isNodeNextRequest(req) ? req : {}
-      const xForwardedProto = originalRequest?.headers['x-forwarded-proto']
-      const isHttps = xForwardedProto
-        ? xForwardedProto === 'https'
-        : !!(originalRequest?.socket as TLSSocket)?.encrypted
-
-      req.headers['x-forwarded-host'] ??= req.headers['host'] ?? this.hostname
-      req.headers['x-forwarded-port'] ??= this.port
-        ? this.port.toString()
-        : isHttps
-          ? '443'
-          : '80'
-      req.headers['x-forwarded-proto'] ??= isHttps ? 'https' : 'http'
-      req.headers['x-forwarded-for'] ??= originalRequest?.socket?.remoteAddress
+      setForwardedHeaders(
+        req.headers,
+        originalRequest,
+        this.hostname,
+        this.port
+      )
 
       // This should be done before any normalization of the pathname happens as
       // it captures the initial URL.

@@ -1227,6 +1227,7 @@ export default class NextNodeServer extends BaseServer<
   /** @internal */
   public getProxyFastPathServerContext(): ProxyFastPathServerContext {
     return {
+      hostname: this.hostname,
       fetchHostname: this.fetchHostname,
       port: this.port,
       getWaitUntil: () => this.getWaitUntil(),
