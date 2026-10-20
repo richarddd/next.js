@@ -4,7 +4,7 @@ import type { FetchEventResult } from '../../web/types'
 import type { ParsedUrl } from '../../../shared/lib/router/utils/parse-url'
 import type { setupFsCheck } from './filesystem'
 import { ipcForbiddenHeaders } from '../server-ipc/utils'
-import { pipeToNodeResponse } from '../../pipe-readable'
+import { streamToNodeResponse } from '../../pipe-readable'
 import { parseUrl } from '../../../shared/lib/router/utils/parse-url'
 import { addRequestMeta } from '../../request-meta'
 
@@ -118,7 +118,7 @@ export function createProxyFastPath({
     res.statusCode = response.status
 
     if (response.body) {
-      await pipeToNodeResponse(response.body, res)
+      await streamToNodeResponse(response.body, res)
     } else {
       res.end()
     }
