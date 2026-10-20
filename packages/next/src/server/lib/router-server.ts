@@ -11,7 +11,6 @@ import url from 'url'
 import path from 'path'
 import loadConfig, { type ConfiguredExperimentalFeature } from '../config'
 import { finalizeBundlerFromConfig, getBundlerFromEnv } from '../../lib/bundler'
-import { serveStatic } from '../serve-static'
 import setupDebug from 'next/dist/compiled/debug'
 import * as Log from '../../build/output/log'
 import {
@@ -733,6 +732,9 @@ export async function initialize(opts: {
         }
 
         try {
+          // Required lazily: only static files need `send` and its dependencies.
+          const { serveStatic } =
+            require('../serve-static') as typeof import('../serve-static')
           return await serveStatic(req, res, matchedOutput.itemPath, {
             root: matchedOutput.itemsRoot,
             // Ensures that etags are not generated for static files when disabled.

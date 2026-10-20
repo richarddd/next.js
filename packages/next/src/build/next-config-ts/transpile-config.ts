@@ -4,6 +4,7 @@ import path from 'node:path'
 import { readFileSync, existsSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 import { deregisterHook, registerHook, requireFromString } from './require-hook'
+import { readTranspiledConfig, writeTranspiledConfig } from './transpile-cache'
 import { warn, warnOnce } from '../output/log'
 import { getNodeOptionsArgs } from '../../server/lib/utils'
 import {
@@ -102,6 +103,17 @@ export async function transpileConfig({
       }
     }
 
+    // Reuse the output of a previous start when nothing it depends on changed.
+    // Only configs without `require()` calls are cached (see handleCJS), since
+    // those need the require hook, which needs the parsed tsconfig.
+    const cachedCode = readTranspiledConfig(dir, nextConfigPath)
+    if (cachedCode !== undefined) {
+      return requireFromString(
+        cachedCode,
+        path.resolve(dir, 'next.config.compiled.js')
+      )
+    }
+
     const compilerOptions = await loadTsConfig(dir)
     return handleCJS({ dir, nextConfigPath, compilerOptions })
   } catch (cause) {
@@ -129,6 +141,12 @@ async function handleCJS({
     const { loadBindings } = require('../swc') as typeof import('../swc')
     const bindings = await loadBindings()
     const { code } = await bindings.transform(nextConfigString, swcOptions)
+
+    // `useWasmBinary` must keep going through this path so the warning below
+    // is still shown.
+    if (!code.includes('require(') && !code.includes('useWasmBinary')) {
+      writeTranspiledConfig(dir, nextConfigPath, nextConfigString, code)
+    }
 
     // register require hook only if require exists
     if (code.includes('require(')) {

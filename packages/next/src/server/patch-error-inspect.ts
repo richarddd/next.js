@@ -1,7 +1,7 @@
 import * as path from 'path'
 import * as url from 'url'
 import type * as util from 'util'
-import { SourceMapConsumer as SyncSourceMapConsumer } from 'next/dist/compiled/source-map'
+import type { SourceMapConsumer as SyncSourceMapConsumer } from 'next/dist/compiled/source-map'
 import {
   type ModernSourceMapPayload,
   devirtualizeReactServerURL,
@@ -108,7 +108,10 @@ function getOrCreateSourceMapConsumer(
   let consumersByURL = sourceMapConsumers.get(payload)
   let consumer = consumersByURL?.get(sourceMapURL)
   if (consumer === undefined) {
-    consumer = new SyncSourceMapConsumer(
+    // Required lazily so the source-map library isn't loaded at startup.
+    const { SourceMapConsumer } =
+      require('next/dist/compiled/source-map') as typeof import('next/dist/compiled/source-map')
+    consumer = new SourceMapConsumer(
       payload,
       // @ts-expect-error: our typings don't include this parameter but it is here.
       sourceMapURL

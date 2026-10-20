@@ -102,6 +102,7 @@ import { isPagesAPIRouteMatch } from './route-matches/pages-api-route-match'
 import type { PagesAPIRouteMatch } from './route-matches/pages-api-route-match'
 import { BubbledError, getTracer } from './lib/trace/tracer'
 import { NextNodeServerSpan } from './lib/trace/constants'
+import { waitForNoInflightRequests } from './lib/inflight-requests'
 import { nodeFs } from './lib/node-fs-methods'
 import type { ProxyFastPathServerContext } from './lib/router-utils/proxy-fast-path'
 import { getRouteRegex } from '../shared/lib/router/utils/route-regex'
@@ -322,7 +323,11 @@ export default class NextNodeServer extends BaseServer<
 
     await this.loadCustomCacheHandlers()
 
+    // Loading a page's chunks is synchronous and can take tens of
+    // milliseconds, so never do it while a request is waiting, e.g. the first
+    // request after the server starts.
     for (const page of Object.keys(pagesManifest || {})) {
+      await waitForNoInflightRequests()
       try {
         await loadComponents({
           distDir: this.distDir,
@@ -338,6 +343,7 @@ export default class NextNodeServer extends BaseServer<
     }
 
     for (const page of Object.keys(appPathsManifest || {})) {
+      await waitForNoInflightRequests()
       try {
         const { ComponentMod } = await loadComponents<
           AppPageModule | AppRouteModule

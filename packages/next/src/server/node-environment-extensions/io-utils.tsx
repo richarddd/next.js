@@ -1,15 +1,37 @@
 import { workAsyncStorage } from '../app-render/work-async-storage.external'
-import { workUnitAsyncStorage } from '../app-render/work-unit-async-storage.external'
-import { abortOnSynchronousPlatformIOAccess } from '../app-render/dynamic-rendering'
-import { RenderStage } from '../app-render/staged-rendering'
-import { applyOwnerStack } from '../dynamic-rendering-utils'
 import {
-  createSyncIOClientError,
-  createSyncIOError,
-  createSyncIORuntimeError,
-  type SyncIOApiType,
-} from '../app-render/sync-io-messages'
-import { InvariantError } from '../../shared/lib/invariant-error'
+  workUnitAsyncStorage,
+  type WorkUnitStore,
+} from '../app-render/work-unit-async-storage.external'
+import type { SyncIOApiType } from '../app-render/sync-io-messages'
+
+// These are only needed once a prerender or staged render actually hits sync
+// IO. Loading them lazily keeps them (and dynamic-rendering's dependencies) off
+// the startup path of every server process, including proxy-only ones.
+function loadSyncIODependencies() {
+  return {
+    ...(require('../app-render/dynamic-rendering') as typeof import('../app-render/dynamic-rendering')),
+    ...(require('../app-render/staged-rendering') as typeof import('../app-render/staged-rendering')),
+    ...(require('../dynamic-rendering-utils') as typeof import('../dynamic-rendering-utils')),
+    ...(require('../app-render/sync-io-messages') as typeof import('../app-render/sync-io-messages')),
+    ...(require('../../shared/lib/invariant-error') as typeof import('../../shared/lib/invariant-error')),
+  }
+}
+
+// Whether the switch below can do anything for this store. Kept as a separate
+// function so it doesn't narrow `workUnitStore` for that switch.
+function mayTrackSyncIO(workUnitStore: WorkUnitStore): boolean {
+  switch (workUnitStore.type) {
+    case 'prerender':
+    case 'prerender-runtime':
+    case 'prerender-client':
+      return true
+    case 'request':
+      return workUnitStore.stagedRendering != null
+    default:
+      return false
+  }
+}
 
 export function io(expression: string, type: SyncIOApiType) {
   const workUnitStore = workUnitAsyncStorage.getStore()
@@ -18,6 +40,20 @@ export function io(expression: string, type: SyncIOApiType) {
   if (!workUnitStore || !workStore) {
     return
   }
+
+  if (!mayTrackSyncIO(workUnitStore)) {
+    return
+  }
+
+  const {
+    abortOnSynchronousPlatformIOAccess,
+    RenderStage,
+    applyOwnerStack,
+    createSyncIOClientError,
+    createSyncIOError,
+    createSyncIORuntimeError,
+    InvariantError,
+  } = loadSyncIODependencies()
 
   switch (workUnitStore.type) {
     case 'prerender':

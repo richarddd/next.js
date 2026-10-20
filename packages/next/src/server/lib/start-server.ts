@@ -39,6 +39,7 @@ import {
 } from './app-info-log'
 import type { AgentFilesResult } from './generate-agent-files'
 import { validateTurboNextConfig } from '../../lib/turbopack-warning'
+import { trackInflightRequest } from './inflight-requests'
 import {
   type Span,
   trace,
@@ -247,6 +248,8 @@ export async function startServer(
   }
 
   async function requestListener(req: IncomingMessage, res: ServerResponse) {
+    // Lets background work such as entry preloading yield to requests.
+    const untrackRequest = trackInflightRequest(res)
     try {
       if (handlersPromise) {
         await handlersPromise
@@ -259,6 +262,7 @@ export async function startServer(
       Log.error(`Failed to handle request for ${req.url}`)
       console.error(err)
     } finally {
+      untrackRequest()
       const memoryRestartStats = getMemoryRestartStats(
         isDev,
         devMemoryThresholdRestart,

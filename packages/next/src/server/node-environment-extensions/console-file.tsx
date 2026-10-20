@@ -1,6 +1,4 @@
 import { consoleAsyncStorage } from '../app-render/console-async-storage.external'
-import { getFileLogger } from '../dev/browser-logs/file-logger'
-import { formatConsoleArgs } from '../../client/lib/console'
 
 type InterceptableConsoleMethod =
   | 'error'
@@ -19,6 +17,12 @@ type InterceptableConsoleMethod =
 
 // Based on https://github.com/facebook/react/blob/28dc0776be2e1370fe217549d32aee2519f0cf05/packages/react-server/src/ReactFlightServer.js#L248
 function patchConsoleMethodDEV(methodName: InterceptableConsoleMethod): void {
+  // Required here rather than at the top so production servers don't load the
+  // development file logger.
+  const { getFileLogger } =
+    require('../dev/browser-logs/file-logger') as typeof import('../dev/browser-logs/file-logger')
+  const { formatConsoleArgs } =
+    require('../../client/lib/console') as typeof import('../../client/lib/console')
   const descriptor = Object.getOwnPropertyDescriptor(console, methodName)
   if (
     descriptor &&
