@@ -94,6 +94,13 @@ export interface RequestMeta {
   middlewareCookie?: string[]
 
   /**
+   * Set when the router server's proxy fast path already ran the Node.js
+   * proxy and the response continues routing, so resolveRoutes reuses this
+   * result instead of running the proxy again.
+   */
+  proxyFastPathResult?: import('./web/types').FetchEventResult
+
+  /**
    * The match on the request for a given route.
    */
   match?: RouteMatch

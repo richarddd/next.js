@@ -103,6 +103,7 @@ import type { PagesAPIRouteMatch } from './route-matches/pages-api-route-match'
 import { BubbledError, getTracer } from './lib/trace/tracer'
 import { NextNodeServerSpan } from './lib/trace/constants'
 import { nodeFs } from './lib/node-fs-methods'
+import type { ProxyFastPathServerContext } from './lib/router-utils/proxy-fast-path'
 import { getRouteRegex } from '../shared/lib/router/utils/route-regex'
 import { pipeToNodeResponse } from './pipe-readable'
 import { createRequestResponseMocks, MockedResponse } from './lib/mock-request'
@@ -1221,6 +1222,15 @@ export default class NextNodeServer extends BaseServer<
     res: NodeNextResponse | ServerResponse
   ): NodeNextResponse {
     return !(res instanceof NodeNextResponse) ? new NodeNextResponse(res) : res
+  }
+
+  /** @internal See `NextServer.getProxyFastPathServerContext`. */
+  public getProxyFastPathServerContext(): ProxyFastPathServerContext {
+    return {
+      fetchHostname: this.fetchHostname,
+      port: this.port,
+      getWaitUntil: () => this.getWaitUntil(),
+    }
   }
 
   public getRequestHandler(): NodeRequestHandler {

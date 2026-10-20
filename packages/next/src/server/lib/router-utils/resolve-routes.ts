@@ -32,7 +32,8 @@ import { removePathPrefix } from '../../../shared/lib/router/utils/remove-path-p
 import { NextDataPathnameNormalizer } from '../../normalizers/request/next-data'
 import { BasePathPathnameNormalizer } from '../../normalizers/request/base-path'
 
-import { addRequestMeta } from '../../request-meta'
+import { addRequestMeta, getRequestMeta } from '../../request-meta'
+import { BubbledError } from '../trace/tracer'
 import { isRSCRequestHeader } from '../is-rsc-request'
 import {
   compileNonPath,
@@ -610,6 +611,16 @@ export function getResolveRoutes(
             let bodyStream: ReadableStream | undefined = undefined
             try {
               try {
+                const proxyFastPathResult = getRequestMeta(
+                  req,
+                  'proxyFastPathResult'
+                )
+                if (proxyFastPathResult) {
+                  // The proxy fast path already ran the proxy for this request
+                  // (see proxy-fast-path.ts). Handle its result like a bubbled
+                  // one instead of running the proxy a second time.
+                  throw new BubbledError(true, proxyFastPathResult)
+                }
                 await serverResult.requestHandler(req, res, parsedUrl)
               } catch (err: any) {
                 if (!('result' in err) || !('response' in err.result)) {

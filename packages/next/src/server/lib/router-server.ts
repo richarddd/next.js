@@ -25,6 +25,7 @@ import { setupFsCheck } from './router-utils/filesystem'
 import { proxyRequest } from './router-utils/proxy-request'
 import { isAbortError, pipeToNodeResponse } from '../pipe-readable'
 import { getResolveRoutes } from './router-utils/resolve-routes'
+import { createProxyFastPath } from './router-utils/proxy-fast-path'
 import { addRequestMeta, getRequestMeta } from '../request-meta'
 import { pathHasPrefix } from '../../shared/lib/router/utils/path-has-prefix'
 import { removePathPrefix } from '../../shared/lib/router/utils/remove-path-prefix'
@@ -355,6 +356,8 @@ export async function initialize(opts: {
 
   renderServer.instance =
     require('./render-server') as typeof import('./render-server')
+
+  let proxyFastPath: ReturnType<typeof createProxyFastPath> | undefined
 
   const requestHandlerImpl: WorkerRequestHandler = async (req, res) => {
     addRequestMeta(req, 'relativeProjectDir', relativeProjectDir)
@@ -920,6 +923,25 @@ export async function initialize(opts: {
     }
 
     try {
+      // Created on the first request, once the build output is known to exist.
+      if (proxyFastPath === undefined) {
+        proxyFastPath = createProxyFastPath({
+          dev: opts.dev,
+          minimalMode: opts.minimalMode,
+          config,
+          fsChecker,
+          distDir: path.join(opts.dir, config.distDir),
+          getServerContext: async () => {
+            const initResult =
+              await renderServer?.instance?.initialize(renderServerOpts)
+            return initResult?.server.getProxyFastPathServerContext()
+          },
+        })
+      }
+      if (proxyFastPath && (await proxyFastPath(req, res))) {
+        return
+      }
+
       await handleRequest(0)
     } catch (err) {
       try {
