@@ -36,14 +36,20 @@ describe('Instrumentation Hook', () => {
   })
 
   describeCase('with-node-middleware', ({ next }) => {
-    it('with-node-middleware should run the instrumentation hook', async () => {
-      const result = await next.fetch('/')
-      expect(result.headers.get('My-Custom-Header')).toBe(
-        'instrumentationFinished=nodejs'
-      )
-      expect(await result.text()).toContain(
-        'Page Node instrumentationFinished=nodejs'
-      )
+    it('with-node-middleware should preserve instrumentation across requests', async () => {
+      const checkInstrumentation = async () => {
+        const result = await next.fetch('/')
+        expect(result.headers.get('My-Custom-Header')).toBe(
+          'instrumentationFinished=nodejs'
+        )
+        expect(await result.text()).toContain(
+          'Page Node instrumentationFinished=nodejs'
+        )
+      }
+
+      await checkInstrumentation()
+      await checkInstrumentation()
+      await Promise.all([checkInstrumentation(), checkInstrumentation()])
     })
   })
 
