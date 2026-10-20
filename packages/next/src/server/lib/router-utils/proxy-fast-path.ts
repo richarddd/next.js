@@ -12,8 +12,9 @@ import {
   SERVER_DIRECTORY,
 } from '../../../shared/lib/constants'
 import { ipcForbiddenHeaders } from '../server-ipc/utils'
-import { pipeToNodeResponse } from '../../pipe-readable'
+import { streamToNodeResponse } from '../../pipe-readable'
 import { searchParamsToUrlQuery } from '../../../shared/lib/router/utils/querystring'
+
 import { addRequestMeta } from '../../request-meta'
 
 export type ProxyFastPathHandler = (
@@ -168,7 +169,7 @@ export function createProxyFastPath({
     res.statusCode = response.status
 
     if (response.body) {
-      await pipeToNodeResponse(response.body, res)
+      await streamToNodeResponse(response.body, res)
     } else {
       res.end()
     }
