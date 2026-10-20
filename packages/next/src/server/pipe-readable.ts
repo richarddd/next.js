@@ -122,6 +122,112 @@ function createWriterFromResponse(
   })
 }
 
+/**
+ * Streams a web ReadableStream to a Node.js response with a plain reader loop
+ * instead of `readable.pipeTo(new WritableStream(...))`, which costs a lot of
+ * per-chunk overhead for small responses. Still writes chunk by chunk, waits
+ * for `drain` under backpressure, and cancels the stream if the client goes
+ * away.
+ *
+ * Writes are corked at the socket until the next tick. If the stream finishes
+ * within that tick, as a complete body does, the headers, body and chunked
+ * terminator go out in a single write. If the next chunk isn't ready yet, the
+ * uncork flushes what's there, so streaming is delayed by at most one tick.
+ * (The socket is corked rather than the response: corking the response can
+ * write the chunked terminator before the last corked chunk.)
+ */
+export async function streamToNodeResponse(
+  readable: ReadableStream<Uint8Array>,
+  res: ServerResponse
+): Promise<void> {
+  if (res.errored || res.destroyed) return
+
+  const reader = readable.getReader()
+  let resolveDrain: (() => void) | null = null
+  let closed = false
+  const waitForDrain = () =>
+    new Promise<void>((resolve) => {
+      resolveDrain = resolve
+    })
+
+  const onDrain = () => {
+    if (resolveDrain) {
+      const resolve = resolveDrain
+      resolveDrain = null
+      resolve()
+    }
+  }
+  res.on('drain', onDrain)
+  res.once('close', () => {
+    closed = true
+    res.off('drain', onDrain)
+    onDrain()
+    // The client went away before we finished: stop the producer.
+    if (!res.writableFinished) {
+      reader.cancel().catch(() => {})
+    }
+  })
+
+  const socket = res.socket
+  let corked = false
+  const uncork = () => {
+    if (!corked) return
+    corked = false
+    socket?.uncork()
+  }
+
+  let started = false
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (closed) return
+
+      if (!started) {
+        started = true
+        getTracer().trace(
+          NextNodeServerSpan.startResponse,
+          { spanName: 'start response' },
+          () => undefined
+        )
+      }
+
+      if (!corked && socket) {
+        corked = true
+        socket.cork()
+        process.nextTick(uncork)
+      }
+
+      const ok = res.write(value)
+      // Added by the `compression` middleware: flushes the partially
+      // compressed response to the client.
+      if ('flush' in res && typeof res.flush === 'function') {
+        res.flush()
+      }
+      if (!ok && !closed) {
+        await waitForDrain()
+      }
+    }
+  } catch (err) {
+    // Let bytes that were already produced reach the client first.
+    uncork()
+    if (res.writableFinished) return
+    res.destroy(err as Error)
+    if (isAbortError(err)) return
+    throw new Error('failed to pipe response', { cause: err })
+  }
+
+  if (closed || res.writableFinished) return
+
+  // `compression` wraps `res.end(chunk, encoding)`, so don't pass a callback.
+  const finished = new Promise<void>((resolve) => {
+    res.once('finish', resolve)
+    res.once('close', resolve)
+  })
+  res.end()
+  await finished
+}
+
 export async function pipeToNodeResponse(
   readable: ReadableStream<Uint8Array>,
   res: ServerResponse,

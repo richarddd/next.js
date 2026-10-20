@@ -12,7 +12,7 @@ import {
 } from '../../../shared/lib/constants'
 import { filterReqHeaders, ipcForbiddenHeaders } from '../server-ipc/utils'
 import { splitCookiesString, toNodeOutgoingHttpHeaders } from '../../web/utils'
-import { pipeToNodeResponse } from '../../pipe-readable'
+import { streamToNodeResponse } from '../../pipe-readable'
 import { signalFromNodeResponse } from '../../web/spec-extension/adapters/next-request'
 import {
   searchParamsToUrlQuery,
@@ -247,7 +247,7 @@ export function createProxyFastPath({
     res.statusCode = response.status
 
     if (response.body) {
-      await pipeToNodeResponse(response.body, res)
+      await streamToNodeResponse(response.body, res)
     } else {
       res.end()
     }
