@@ -930,10 +930,10 @@ export async function initialize(opts: {
           config,
           fsChecker,
           distDir: path.join(opts.dir, config.distDir),
-          getServerContext: async () => {
+          getHandler: async () => {
             const initResult =
               await renderServer?.instance?.initialize(renderServerOpts)
-            return initResult?.server.getProxyFastPathServerContext()
+            return initResult?.server.getProxyFastPathHandler()
           },
         })
       }

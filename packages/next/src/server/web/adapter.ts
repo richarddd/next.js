@@ -225,6 +225,8 @@ export async function adapter(
     })
   }
 
+  let previewProps: ReturnType<typeof getEdgePreviewProps> | undefined
+
   if (
     // If we are inside of the next start sandbox
     // leverage the shared instance if not we need
@@ -232,6 +234,7 @@ export async function adapter(
     !(globalThis as any).__incrementalCacheShared &&
     (params as any).IncrementalCache
   ) {
+    previewProps = getEdgePreviewProps()
     ;(globalThis as any).__incrementalCache = new (
       params as {
         IncrementalCache: typeof import('../lib/incremental-cache').IncrementalCache
@@ -243,13 +246,13 @@ export async function adapter(
       dev: process.env.NODE_ENV === 'development',
       requestHeaders: params.request.headers as any,
 
-      previewProps: getEdgePreviewProps(),
+      previewProps,
       prerenderManifest: {
         version: -1 as any, // letting us know this doesn't conform to spec
         routes: {},
         dynamicRoutes: {},
         notFoundRoutes: [],
-        preview: getEdgePreviewProps(),
+        preview: previewProps,
       },
     })
   }
@@ -297,7 +300,6 @@ export async function adapter(
             const onUpdateCookies = (cookies: Array<string>) => {
               cookiesFromResponse = cookies
             }
-            const previewProps = getEdgePreviewProps()
             const page = '/' // Fake Work
             const fallbackRouteParams = null
 
@@ -312,7 +314,7 @@ export async function adapter(
               request.nextUrl,
               implicitTags,
               onUpdateCookies,
-              previewProps,
+              previewProps ?? getEdgePreviewProps(),
               // Edge route handlers can't use `"use cache"`, so there's no HMR
               // refresh hash to thread through here.
               undefined

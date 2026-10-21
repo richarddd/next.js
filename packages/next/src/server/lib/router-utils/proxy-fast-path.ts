@@ -3,6 +3,7 @@ import type { NextConfigComplete, NextConfigRuntime } from '../../config-shared'
 import type { FunctionsConfigManifest } from '../../../build'
 import type { MiddlewareManifest } from '../../../build/webpack/plugins/middleware-plugin'
 import type { FetchEventResult } from '../../web/types'
+import type { NextUrlWithParsedQuery } from '../../request-meta'
 import type { setupFsCheck } from './filesystem'
 import path from 'path'
 import {
@@ -10,51 +11,28 @@ import {
   MIDDLEWARE_MANIFEST,
   SERVER_DIRECTORY,
 } from '../../../shared/lib/constants'
-import { filterReqHeaders, ipcForbiddenHeaders } from '../server-ipc/utils'
-import { splitCookiesString, toNodeOutgoingHttpHeaders } from '../../web/utils'
+import { ipcForbiddenHeaders } from '../server-ipc/utils'
 import { pipeToNodeResponse } from '../../pipe-readable'
-import { signalFromNodeResponse } from '../../web/spec-extension/adapters/next-request'
-import {
-  searchParamsToUrlQuery,
-  urlQueryToSearchParams,
-} from '../../../shared/lib/router/utils/querystring'
+import { searchParamsToUrlQuery } from '../../../shared/lib/router/utils/querystring'
 import { addRequestMeta } from '../../request-meta'
-import { setForwardedHeaders } from '../set-forwarded-headers'
-import { getTracer } from '../trace/tracer'
 
-export interface ProxyFastPathServerContext {
-  hostname?: string
-  fetchHostname?: string
-  port?: number
-  getWaitUntil: () => ((promise: Promise<any>) => void) | undefined
-}
-
-type NodeProxyModule = {
-  default: (opts: {
-    handler: unknown
-    request: unknown
-    page: string
-  }) => Promise<FetchEventResult>
-  proxy?: unknown
-  middleware?: unknown
-}
+export type ProxyFastPathHandler = (
+  req: IncomingMessage,
+  res: ServerResponse,
+  parsed: Pick<NextUrlWithParsedQuery, 'pathname' | 'query'>
+) => Promise<FetchEventResult | { finished: boolean }>
 
 // Match resolve-routes.ts's response-header filtering.
 const SKIPPED_RESPONSE_HEADERS = new Set([
+  ...ipcForbiddenHeaders,
   'content-length',
+  'set-cookie',
   'x-middleware-rewrite',
   'x-middleware-redirect',
   'x-middleware-refresh',
   'x-middleware-next',
   'x-middleware-set-cookie',
 ])
-
-const CONTINUE_ROUTING_HEADERS = [
-  'x-middleware-next',
-  'x-middleware-rewrite',
-  'location',
-  'x-middleware-override-headers',
-]
 
 /**
  * Runs eligible Node.js proxies without a second routing pass.
@@ -66,14 +44,14 @@ export function createProxyFastPath({
   config,
   fsChecker,
   distDir,
-  getServerContext,
+  getHandler,
 }: {
   dev: boolean | undefined
   minimalMode: boolean | undefined
   config: NextConfigComplete | NextConfigRuntime
   fsChecker: Awaited<ReturnType<typeof setupFsCheck>>
   distDir: string
-  getServerContext: () => Promise<ProxyFastPathServerContext | undefined>
+  getHandler: () => Promise<ProxyFastPathHandler | undefined>
 }): ((req: IncomingMessage, res: ServerResponse) => Promise<boolean>) | null {
   if (
     dev ||
@@ -128,15 +106,7 @@ export function createProxyFastPath({
   }
   const proxyRegexes = matchers.map((matcher) => new RegExp(matcher.regexp))
 
-  const nextConfigForRequest = {
-    basePath: config.basePath,
-    i18n: config.i18n,
-    trailingSlash: config.trailingSlash,
-    experimental: config.experimental,
-  }
-
-  let serverContext: ProxyFastPathServerContext | undefined
-  let proxyModule: NodeProxyModule | undefined
+  let handler: ProxyFastPathHandler | undefined
 
   return async function handleWithProxyFastPath(req, res) {
     const { method, url, headers } = req
@@ -162,78 +132,38 @@ export function createProxyFastPath({
     if (precedingRegexes.some((regex) => regex.test(pathname))) return false
     if (!proxyRegexes.some((regex) => regex.test(pathname))) return false
 
-    serverContext ??= await getServerContext()
-    if (!serverContext) return false
+    handler ??= await getHandler()
+    if (!handler) return false
 
-    proxyModule ??= (await require(
-      path.join(distDir, SERVER_DIRECTORY, 'middleware.js')
-    )) as NodeProxyModule
-    setForwardedHeaders(
-      headers,
-      req,
-      serverContext.hostname,
-      serverContext.port
-    )
-
-    // Same request URL as `NextNodeServer.runMiddleware` builds.
-    const search = queryIndex === -1 ? '' : url.slice(queryIndex + 1)
-    const query = search
-      ? urlQueryToSearchParams(
-          searchParamsToUrlQuery(new URLSearchParams(search))
-        ).toString()
-      : ''
-    const protocol = headers['x-forwarded-proto']?.includes('https')
-      ? 'https'
-      : 'http'
-
-    const adapterOptions = {
-      handler: proxyModule.proxy || proxyModule.middleware || proxyModule,
-      request: {
-        headers,
-        method,
-        nextConfig: nextConfigForRequest,
-        url: `${protocol}://${serverContext.fetchHostname || 'localhost'}:${serverContext.port}${pathname}${query ? `?${query}` : ''}`,
-        page: {},
-        body: undefined,
-        signal: signalFromNodeResponse(res),
-        waitUntil: serverContext.getWaitUntil(),
-      },
-      page: 'middleware',
-    }
-    const result = await getTracer().runWithDetachedContext(() =>
-      proxyModule!.default(adapterOptions)
-    )
-
-    result.waitUntil.catch((error) => {
-      console.error(`Uncaught: middleware waitUntil errored`, error)
+    const result = await handler(req, res, {
+      pathname,
+      query:
+        queryIndex === -1
+          ? {}
+          : searchParamsToUrlQuery(
+              new URLSearchParams(url.slice(queryIndex + 1))
+            ),
     })
+    if (!('response' in result)) return false
 
     const { response } = result
-    if (response.headers.has('set-cookie')) {
-      const cookies = response.headers
-        .getSetCookie()
-        .flatMap((cookie) => splitCookiesString(cookie))
-      response.headers.delete('set-cookie')
-      for (const cookie of cookies) {
-        response.headers.append('set-cookie', cookie)
-      }
-      addRequestMeta(req, 'middlewareCookie', cookies)
-    }
-
     // Reuse the result if routing continues so the proxy runs only once.
-    if (CONTINUE_ROUTING_HEADERS.some((name) => response.headers.has(name))) {
+    if (
+      response.headers.has('x-middleware-next') ||
+      response.headers.has('x-middleware-rewrite') ||
+      response.headers.has('location') ||
+      response.headers.has('x-middleware-override-headers')
+    ) {
       addRequestMeta(req, 'proxyFastPathResult', result)
       return false
     }
 
-    const responseHeaders = filterReqHeaders(
-      toNodeOutgoingHttpHeaders(response.headers),
-      ipcForbiddenHeaders
-    )
-    for (const [key, value] of Object.entries(responseHeaders)) {
-      if (value && !SKIPPED_RESPONSE_HEADERS.has(key)) {
-        res.setHeader(key, value)
-      }
+    response.headers.forEach((value, key) => {
+      if (value && !SKIPPED_RESPONSE_HEADERS.has(key)) res.setHeader(key, value)
+    })
+    const cookies = response.headers.getSetCookie()
+    if (cookies.length) {
+      res.setHeader('set-cookie', cookies.length === 1 ? cookies[0] : cookies)
     }
     res.statusCode = response.status
 
