@@ -20,6 +20,7 @@ import {
 } from '../../../shared/lib/router/utils/querystring'
 import { addRequestMeta } from '../../request-meta'
 import { setForwardedHeaders } from '../set-forwarded-headers'
+import { getTracer } from '../trace/tracer'
 
 export interface ProxyFastPathServerContext {
   hostname?: string
@@ -185,7 +186,7 @@ export function createProxyFastPath({
       ? 'https'
       : 'http'
 
-    const result = await proxyModule.default({
+    const adapterOptions = {
       handler: proxyModule.proxy || proxyModule.middleware || proxyModule,
       request: {
         headers,
@@ -198,7 +199,10 @@ export function createProxyFastPath({
         waitUntil: serverContext.getWaitUntil(),
       },
       page: 'middleware',
-    })
+    }
+    const result = await getTracer().runWithDetachedContext(() =>
+      proxyModule!.default(adapterOptions)
+    )
 
     result.waitUntil.catch((error) => {
       console.error(`Uncaught: middleware waitUntil errored`, error)
