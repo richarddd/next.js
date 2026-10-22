@@ -103,6 +103,8 @@ import type { PagesAPIRouteMatch } from './route-matches/pages-api-route-match'
 import { BubbledError, getTracer } from './lib/trace/tracer'
 import { NextNodeServerSpan } from './lib/trace/constants'
 import { nodeFs } from './lib/node-fs-methods'
+import { setForwardedHeaders } from './lib/set-forwarded-headers'
+import type { ProxyFastPathHandler } from './lib/router-utils/proxy-fast-path'
 import { getRouteRegex } from '../shared/lib/router/utils/route-regex'
 import { pipeToNodeResponse } from './pipe-readable'
 import { createRequestResponseMocks, MockedResponse } from './lib/mock-request'
@@ -1223,6 +1225,26 @@ export default class NextNodeServer extends BaseServer<
     return !(res instanceof NodeNextResponse) ? new NodeNextResponse(res) : res
   }
 
+  /** @internal */
+  public async getProxyFastPathHandler(): Promise<ProxyFastPathHandler> {
+    await this.prepare()
+    const nodeMiddleware = await this.loadNodeMiddleware()
+    return (req, res, parsed) => {
+      setForwardedHeaders(req.headers, req, this.hostname, this.port)
+      addRequestMeta(
+        req,
+        'initProtocol',
+        req.headers['x-forwarded-proto']?.includes('https') ? 'https' : 'http'
+      )
+      return this.runMiddleware({
+        request: this.normalizeReq(req),
+        response: this.normalizeRes(res),
+        parsed,
+        nodeMiddleware,
+      })
+    }
+  }
+
   public getRequestHandler(): NodeRequestHandler {
     const handler = this.makeRequestHandler()
     if (this.serverOptions.experimentalTestProxy) {
@@ -1439,7 +1461,7 @@ export default class NextNodeServer extends BaseServer<
   public async render404(
     req: NodeNextRequest | IncomingMessage,
     res: NodeNextResponse | ServerResponse,
-    parsedUrl?: NextUrlWithParsedQuery,
+    parsedUrl?: Pick<NextUrlWithParsedQuery, 'pathname' | 'query'>,
     setHeaders?: boolean
   ): Promise<void> {
     return super.render404(
@@ -1633,8 +1655,9 @@ export default class NextNodeServer extends BaseServer<
   protected async runMiddleware(params: {
     request: NodeNextRequest
     response: NodeNextResponse
-    parsedUrl: ParsedUrl
-    parsed: NextUrlWithParsedQuery
+    parsed: Pick<NextUrlWithParsedQuery, 'pathname' | 'query'>
+    parsedUrl?: ParsedUrl
+    nodeMiddleware?: any
     onWarning?: (warning: Error) => void
   }) {
     if (process.env.NEXT_MINIMAL) {
@@ -1682,19 +1705,18 @@ export default class NextNodeServer extends BaseServer<
       params?: { [key: string]: string | string[] }
     } = {}
 
-    const middleware = await this.getMiddleware()
-    if (!middleware) {
-      return { finished: false }
+    let middlewareInfo: ReturnType<typeof this.getEdgeFunctionInfo> = null
+    if (!params.nodeMiddleware) {
+      const middleware = await this.getMiddleware()
+      if (!middleware || !(await this.hasMiddleware(middleware.page))) {
+        return { finished: false }
+      }
+      await this.ensureMiddleware(params.request.url)
+      middlewareInfo = this.getEdgeFunctionInfo({
+        page: middleware.page,
+        middleware: true,
+      })
     }
-    if (!(await this.hasMiddleware(middleware.page))) {
-      return { finished: false }
-    }
-
-    await this.ensureMiddleware(params.request.url)
-    const middlewareInfo = this.getEdgeFunctionInfo({
-      page: middleware.page,
-      middleware: true,
-    })
 
     const method = (params.request.method || 'GET').toUpperCase()
     const requestData = {
@@ -1727,7 +1749,8 @@ export default class NextNodeServer extends BaseServer<
     // we decide we want to
     if (!middlewareInfo) {
       let middlewareModule
-      middlewareModule = await this.loadNodeMiddleware()
+      middlewareModule =
+        params.nodeMiddleware || (await this.loadNodeMiddleware())
 
       if (!middlewareModule) {
         throw new MiddlewareNotFoundError()
@@ -1735,33 +1758,29 @@ export default class NextNodeServer extends BaseServer<
       const adapterFn: typeof import('./web/adapter').adapter =
         middlewareModule.default || middlewareModule
 
+      const body = requestData.body
       const hasRequestBody =
-        !['HEAD', 'GET'].includes(params.request.method) &&
-        Boolean(requestData.body)
+        !['HEAD', 'GET'].includes(params.request.method) && Boolean(body)
 
       try {
         // Node.js middleware runs in-process, inside the active
         // `handleRequest` span. Detach that span so the middleware span
         // becomes a sibling root (or parents to an incoming traceparent),
         // matching edge middleware which runs in a detached sandbox.
-        result = await getTracer().runWithDetachedContext(() =>
-          adapterFn({
+        result = await getTracer().runWithDetachedContext(() => {
+          requestData.body = hasRequestBody ? body.cloneBodyStream() : undefined
+          return adapterFn({
             handler:
               middlewareModule.proxy ||
               middlewareModule.middleware ||
               middlewareModule,
-            request: {
-              ...requestData,
-              body: hasRequestBody
-                ? requestData.body.cloneBodyStream()
-                : undefined,
-            },
+            request: requestData,
             page: 'middleware',
           })
-        )
+        })
       } finally {
         if (hasRequestBody) {
-          await requestData.body.finalize()
+          await body.finalize()
         }
       }
     } else {
@@ -1874,7 +1893,7 @@ export default class NextNodeServer extends BaseServer<
       result = await this.runMiddleware({
         request: req,
         response: res,
-        parsedUrl: parsedUrl,
+        parsedUrl,
         parsed: parsed,
       })
 

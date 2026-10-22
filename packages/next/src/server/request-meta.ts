@@ -93,6 +93,9 @@ export interface RequestMeta {
    */
   middlewareCookie?: string[]
 
+  /** Proxy result to reuse when routing continues. */
+  proxyFastPathResult?: import('./web/types').FetchEventResult
+
   /**
    * The match on the request for a given route.
    */
