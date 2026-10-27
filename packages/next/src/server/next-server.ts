@@ -26,6 +26,7 @@ import type { Params } from './request/params'
 import type { MiddlewareRouteMatch } from '../shared/lib/router/utils/middleware-route-matcher'
 import type { RouteMatch } from './route-matches/route-match'
 import type { IncomingMessage, ServerResponse } from 'http'
+import type { TLSSocket } from 'tls'
 import type { ParsedUrlQuery } from 'querystring'
 import type { ParsedUrl } from '../shared/lib/router/utils/parse-url'
 import type { CacheControl } from './lib/cache-control'
@@ -103,6 +104,7 @@ import type { PagesAPIRouteMatch } from './route-matches/pages-api-route-match'
 import { BubbledError, getTracer } from './lib/trace/tracer'
 import { NextNodeServerSpan } from './lib/trace/constants'
 import { nodeFs } from './lib/node-fs-methods'
+import type { ProxyFastPathHandler } from './lib/router-utils/proxy-fast-path'
 import { getRouteRegex } from '../shared/lib/router/utils/route-regex'
 import { pipeToNodeResponse } from './pipe-readable'
 import { createRequestResponseMocks, MockedResponse } from './lib/mock-request'
@@ -1223,6 +1225,38 @@ export default class NextNodeServer extends BaseServer<
     return !(res instanceof NodeNextResponse) ? new NodeNextResponse(res) : res
   }
 
+  /** @internal */
+  public async getProxyFastPathHandler(): Promise<ProxyFastPathHandler> {
+    await this.prepare()
+    const nodeMiddleware = await this.loadNodeMiddleware()
+    return (req, res, parsed) => {
+      const forwardedProto = req.headers['x-forwarded-proto']
+      const isHttps = forwardedProto
+        ? forwardedProto === 'https'
+        : !!(req.socket as TLSSocket)?.encrypted
+      req.headers['x-forwarded-host'] ??= req.headers.host ?? this.hostname
+      req.headers['x-forwarded-port'] ??= this.port
+        ? this.port.toString()
+        : isHttps
+          ? '443'
+          : '80'
+      req.headers['x-forwarded-proto'] ??= isHttps ? 'https' : 'http'
+      req.headers['x-forwarded-for'] ??= req.socket?.remoteAddress
+      addRequestMeta(
+        req,
+        'initProtocol',
+        req.headers['x-forwarded-proto']?.includes('https') ? 'https' : 'http'
+      )
+      return this.runMiddleware({
+        request: this.normalizeReq(req),
+        response: this.normalizeRes(res),
+        parsedUrl: parsed,
+        parsed: parsed as NextUrlWithParsedQuery,
+        nodeMiddleware,
+      })
+    }
+  }
+
   public getRequestHandler(): NodeRequestHandler {
     const handler = this.makeRequestHandler()
     if (this.serverOptions.experimentalTestProxy) {
@@ -1635,6 +1669,7 @@ export default class NextNodeServer extends BaseServer<
     response: NodeNextResponse
     parsedUrl: ParsedUrl
     parsed: NextUrlWithParsedQuery
+    nodeMiddleware?: any
     onWarning?: (warning: Error) => void
   }) {
     if (process.env.NEXT_MINIMAL) {
@@ -1682,19 +1717,18 @@ export default class NextNodeServer extends BaseServer<
       params?: { [key: string]: string | string[] }
     } = {}
 
-    const middleware = await this.getMiddleware()
-    if (!middleware) {
-      return { finished: false }
+    let middlewareInfo: ReturnType<typeof this.getEdgeFunctionInfo> = null
+    if (!params.nodeMiddleware) {
+      const middleware = await this.getMiddleware()
+      if (!middleware || !(await this.hasMiddleware(middleware.page))) {
+        return { finished: false }
+      }
+      await this.ensureMiddleware(params.request.url)
+      middlewareInfo = this.getEdgeFunctionInfo({
+        page: middleware.page,
+        middleware: true,
+      })
     }
-    if (!(await this.hasMiddleware(middleware.page))) {
-      return { finished: false }
-    }
-
-    await this.ensureMiddleware(params.request.url)
-    const middlewareInfo = this.getEdgeFunctionInfo({
-      page: middleware.page,
-      middleware: true,
-    })
 
     const method = (params.request.method || 'GET').toUpperCase()
     const requestData = {
@@ -1727,7 +1761,8 @@ export default class NextNodeServer extends BaseServer<
     // we decide we want to
     if (!middlewareInfo) {
       let middlewareModule
-      middlewareModule = await this.loadNodeMiddleware()
+      middlewareModule =
+        params.nodeMiddleware || (await this.loadNodeMiddleware())
 
       if (!middlewareModule) {
         throw new MiddlewareNotFoundError()
