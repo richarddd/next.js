@@ -25,6 +25,7 @@ import { setupFsCheck } from './router-utils/filesystem'
 import { proxyRequest } from './router-utils/proxy-request'
 import { isAbortError, pipeToNodeResponse } from '../pipe-readable'
 import { getResolveRoutes } from './router-utils/resolve-routes'
+import { createProxyFastPath } from './router-utils/proxy-fast-path'
 import { addRequestMeta, getRequestMeta } from '../request-meta'
 import { pathHasPrefix } from '../../shared/lib/router/utils/path-has-prefix'
 import { removePathPrefix } from '../../shared/lib/router/utils/remove-path-prefix'
@@ -920,6 +921,10 @@ export async function initialize(opts: {
     }
 
     try {
+      if (proxyFastPath && (await proxyFastPath(req, res))) {
+        return
+      }
+
       await handleRequest(0)
     } catch (err) {
       try {
@@ -991,6 +996,13 @@ export async function initialize(opts: {
   // pre-initialize workers
   const handlers = await renderServer.instance.initialize(renderServerOpts)
   const getAssetPrefix = () => handlers.server.getAssetPrefix()
+  const proxyFastPath = createProxyFastPath({
+    dev: opts.dev,
+    minimalMode: opts.minimalMode,
+    config,
+    fsChecker,
+    getHandler: () => handlers.server.getProxyFastPathHandler(),
+  })
 
   // this must come after initialize of render server since it's
   // using initialized methods

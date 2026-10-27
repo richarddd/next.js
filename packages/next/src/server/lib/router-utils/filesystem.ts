@@ -242,6 +242,9 @@ export async function setupFsCheck(opts: {
   let middlewareMatcher:
     | ReturnType<typeof getMiddlewareRouteMatcher>
     | undefined = () => false
+  let nodeMiddlewareMatchers:
+    | Parameters<typeof getMiddlewareRouteMatcher>[0]
+    | undefined
 
   const distDir = path.join(opts.dir, opts.config.distDir)
   const publicFolderPath = path.join(opts.dir, 'public')
@@ -530,11 +533,12 @@ export async function setupFsCheck(opts: {
         middlewareManifest.middleware?.['/']?.matchers
       )
     } else if (functionsConfigManifest?.functions['/_middleware']) {
-      middlewareMatcher = getMiddlewareRouteMatcher(
-        functionsConfigManifest.functions['/_middleware'].matchers ?? [
-          { regexp: '.*', originalSource: '/:path*' },
-        ]
-      )
+      const matchers = functionsConfigManifest.functions['/_middleware']
+        .matchers ?? [{ regexp: '.*', originalSource: '/:path*' }]
+      middlewareMatcher = getMiddlewareRouteMatcher(matchers)
+      if (!middlewareManifest.middleware?.['/']) {
+        nodeMiddlewareMatchers = matchers
+      }
     }
 
     customRoutes = {
@@ -686,6 +690,7 @@ export async function setupFsCheck(opts: {
 
     previewProps,
     middlewareMatcher: middlewareMatcher as MiddlewareRouteMatch | undefined,
+    nodeMiddlewareMatchers,
 
     ensureCallback(fn: typeof ensureFn) {
       ensureFn = fn

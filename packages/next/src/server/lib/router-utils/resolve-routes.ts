@@ -32,7 +32,8 @@ import { removePathPrefix } from '../../../shared/lib/router/utils/remove-path-p
 import { NextDataPathnameNormalizer } from '../../normalizers/request/next-data'
 import { BasePathPathnameNormalizer } from '../../normalizers/request/base-path'
 
-import { addRequestMeta } from '../../request-meta'
+import { addRequestMeta, getRequestMeta } from '../../request-meta'
+import { BubbledError } from '../trace/tracer'
 import { isRSCRequestHeader } from '../is-rsc-request'
 import {
   compileNonPath,
@@ -573,14 +574,8 @@ export function getResolveRoutes(
           }
 
           if (
-            // @ts-expect-error BaseNextRequest stuff
             match?.(parsedUrl.pathname, req, parsedUrl.query) ||
-            match?.(
-              maybeDecodedPathname,
-              // @ts-expect-error BaseNextRequest stuff
-              req,
-              parsedUrl.query
-            )
+            match?.(maybeDecodedPathname, req, parsedUrl.query)
           ) {
             if (ensureMiddleware) {
               await ensureMiddleware(req.url)
@@ -610,6 +605,13 @@ export function getResolveRoutes(
             let bodyStream: ReadableStream | undefined = undefined
             try {
               try {
+                const proxyFastPathResult = getRequestMeta(
+                  req,
+                  'proxyFastPathResult'
+                )
+                if (proxyFastPathResult) {
+                  throw new BubbledError(true, proxyFastPathResult)
+                }
                 await serverResult.requestHandler(req, res, parsedUrl)
               } catch (err: any) {
                 if (!('result' in err) || !('response' in err.result)) {
