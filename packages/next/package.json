@@ -265,7 +265,6 @@
     "devalue": "2.0.1",
     "domain-browser": "4.19.0",
     "edge-runtime": "4.0.1",
-    "esbuild": "0.25.9",
     "events": "3.3.0",
     "find-up": "4.1.0",
     "fresh": "0.5.2",
